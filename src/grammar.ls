@@ -442,8 +442,8 @@ operators =
   # Listed from lower precedence.
   <[ left     POST_IF FOR WHILE ]>
   <[ right    BACKPIPE     ]>
-  <[ right    , ASSIGN HURL EXTENDS INDENT SWITCH CASE TO BY LABEL WHERE ]>
   <[ left     PIPE         ]>
+  <[ right    , ASSIGN HURL EXTENDS INDENT SWITCH CASE TO BY LABEL WHERE ]>
   <[ right    LOGIC        ]>
   <[ left     BITWISE      ]>
   <[ right    COMPARE      ]>
