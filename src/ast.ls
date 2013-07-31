@@ -1993,10 +1993,9 @@ class exports.While extends Node
       else
         unless @body or @index
           @addBody Block Var @index = \ridx$
-        body = @oldBody ? @body
-        last = body.lines?[*-1]
+        last = @body.lines?[*-1]
         if (@is-comprehension or @in-comprehension) and not last?is-comprehension
-          body.makeReturn it
+          @body.makeReturn it
           @else?makeReturn it
           @has-returned = true
         else
