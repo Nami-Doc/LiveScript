@@ -1976,7 +1976,7 @@ class exports.While extends Node
     for node in @body?.lines or [] then return node if node.getJump ctx
 
   addBody: (@body) ->
-    @body = Block If @guard, body if @guard
+    @body = Block If @guard, @oldBody = body if @guard
     [top] = @body.lines
     @body.lines.length = 0 if top?verb is \continue and not top.label
     this
@@ -1993,9 +1993,10 @@ class exports.While extends Node
       else
         unless @body or @index
           @addBody Block Var @index = \ridx$
-        last = @body.lines?[*-1]
+        body = @oldBody ? @body
+        last = body.lines?[*-1]
         if (@is-comprehension or @in-comprehension) and not last?is-comprehension
-          @body.makeReturn it
+          body.makeReturn it
           @else?makeReturn it
           @has-returned = true
         else
@@ -2041,7 +2042,7 @@ class exports.While extends Node
       else
         @has-returned = true
         if @res-var
-          @body.makeReturn @res-var
+          (@oldBody ? @body)makeReturn @res-var
     if @returns
       @body = Block @body.makeObjReturn \results$ if @objComp
       @body = If @guard, @body if @guard and @objComp
@@ -2075,14 +2076,15 @@ class exports.For extends While
   show: -> (@kind ++ @index)join ' '
 
   addBody: (body) ->
+    super body
     if @let
       @item = Literal \.. if delete @ref
-      body = Block Call.let do
+      @body = Block Call.let do
         with []
           ..push Assign Var(that), Literal \index if delete @index
           ..push Assign that,      Literal \item if delete @item
         body
-    super body
+    this
 
   compileNode: (o) ->
     o.loop = true

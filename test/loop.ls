@@ -595,7 +595,7 @@ for let k, v of {a: \b}
 ok 7 is i is v
 
 fns = for <[foo bar]>
-  for let i in [7 8]
+  for let i in [7 8] when i > 7
     -> .. + i
 eq \foo7 fns.0.0!
-eq \bar8 fns.1.1!
+eq \bar8 fns.1.0!
