@@ -32,7 +32,8 @@ o = (patterns, action, options) ->
   patterns.=trim!split /\s+/
   action &&= if action is ditto then last else
     "#action"
-    .replace /^function\s*\(\)\s*\{\s*return\s*([\s\S]*);\s*\}/ '$$$$ = $1;'
+    .replace /^function\s*\(\)\s*\{\s*([\s\S]*\S)\s*\}/ '$1'
+    .replace /\breturn\b/ '$$$$ ='
     .replace /\b(?!Er)[A-Z][\w.]*/g \yy.$&
     .replace /\.L\(/g '$&yylineno, '
   [patterns, last := action or '', options]
@@ -51,13 +52,108 @@ o = (patterns, action, options) ->
 # value for the _MATH_ terminal, and `$3` would be the value of the second
 # _Expression_.
 bnf =
-  # The types of things that can be accessed or called into.
-  Chain:
-    o \ID            -> Chain L Var $1
-    o \Parenthetical -> Chain $1
-    o \List          ditto
-    o \STRNUM        -> Chain L Literal $1
+  # Things that can directly be accessed or called.
+  Head:
+    o \ID            -> L Var $1
+    o \STRNUM        -> L Literal $1
     o \LITERAL       ditto
+
+    o \Parenthetical
+    o \List
+
+    # The function literal can be either anonymous with `->`,
+    o 'PARAM( ArgList OptComma )PARAM -> Block'
+    , -> L Fun $2, $6, /~/.test($5), /--|~~/.test($5), /!/.test($5)
+    # or named with `function`.
+    o 'FUNCTION CALL( ArgList OptComma )CALL Block' -> L Fun($3, $6)named $1
+
+    o 'IF Expression Block Else'      -> If $2, $3, $1 is \unless .addElse $4
+
+    # Loops can either be normal with a block of expressions to execute
+    # and an optional `else` clause,
+    o 'LoopHead Block Else' -> $1.addBody $2 .addElse $3
+    # as a do block
+    o 'DO Block WHILE Expression'
+    , -> new While($4, $3 is \until, true)addBody $2
+    # with a guard
+    o 'DO Block WHILE Expression CASE Expression'
+    , -> new While($4, $3 is \until, true)addGuard $6 .addBody $2
+
+    o 'SWITCH Exprs Cases'               -> new Switch $1, $2, $3
+    o 'SWITCH Exprs Cases DEFAULT Block' -> new Switch $1, $2, $3, $5
+    o 'SWITCH Exprs Cases ELSE    Block' -> new Switch $1, $2, $3, $5
+    o 'SWITCH       Cases'               -> new Switch $1, null $2
+    o 'SWITCH       Cases DEFAULT Block' -> new Switch $1, null $2, $4
+    o 'SWITCH       Cases ELSE    Block' -> new Switch $1, null $2, $4
+    o 'SWITCH                     Block' -> new Switch $1, null [], $2
+
+    o 'TRY Block'                               -> new Try $2
+    o 'TRY Block CATCH Block'                   -> new Try $2, , $4
+    o 'TRY Block CATCH Block     FINALLY Block' -> new Try $2, , $4, $6
+    o 'TRY Block CATCH Arg Block'               -> new Try $2, $4, $5
+    o 'TRY Block CATCH Arg Block FINALLY Block' -> new Try $2, $4, $5, $7
+    o 'TRY Block                 FINALLY Block' -> new Try $2, , , $4
+
+    o 'CLASS Chain OptExtends OptImplements Block'
+    , -> new Class title: $2.unwrap!, sup: $3, mixins: $4, body: $5
+    o 'CLASS       OptExtends OptImplements Block'
+    , -> new Class                    sup: $2, mixins: $3, body: $4
+
+    o 'LET CALL( ArgList OptComma )CALL Block' -> Call.let $3, $6
+
+    o 'WITH Expression Block'
+    , -> Cascade $2, $3, \with
+    o 'FOR  Expression Block'
+    , -> new For(kind: $1, source: $2, body: $3, ref: true)addBody $3
+
+
+    o '[ Expression LoopHeads ]'  -> $3.0.makeComprehension $2, $3.slice 1
+    o '[ Expression LoopHeads DEDENT ]'  -> $3.0.makeComprehension $2, $3.slice 1
+    o '{ [ ArgList OptComma ] LoopHeads }'
+    , -> $6.0.addObjComp!makeComprehension (L Arr $3), $6.slice 1
+
+    o '( BIOP )'            -> Binary $2
+    o '( BIOP Expression )' -> Binary $2, , $3
+    o '( Expression BIOP )' -> Binary $3,   $2
+
+    o '( BIOPR )'
+    , -> if   \! is $2.charAt 0
+               then Binary $2.slice(1) .invertIt!
+               else Binary $2
+    o '( BIOPR Expression )'
+    , -> if   \! is $2.charAt 0
+               then Binary $2.slice(1), , $3 .invertIt!
+               else Binary $2, , $3
+    o '( Expression BIOPR )'
+    , -> if   \! is $3.charAt 0
+               then Binary $3.slice(1), $2 .invertIt!
+               else Binary $3, $2
+
+    o '( BIOPBP )'                              -> Binary $2
+    o '( BIOPBP CALL( ArgList OptComma )CALL )' -> Binary $2, , $4
+
+    o '( BIOPP )'                                -> Binary $2
+    o '( PARAM( ArgList OptComma )PARAM BIOPP )' -> Binary $6, $3
+
+    o '( UNARY )'           -> Unary $2
+    o '( CREMENT )'         ditto
+
+    o '( BACKTICK Chain BACKTICK )'            -> $3
+    o '( Expression BACKTICK Chain BACKTICK )' -> $4.add Call [$2]
+    o '( BACKTICK Chain BACKTICK Expression )'
+    , -> Chain(Chain Var \flip$ .add Call [$3]).flipIt!add Call [$5]
+
+    o '[ Expression TO Expression ]'
+    , -> new For from: $2, op: $3, to: $4, in-comprehension: true
+    o '[ Expression TO Expression BY Expression ]'
+    , -> new For from: $2, op: $3, to: $4, step: $6, in-comprehension: true
+    o '[ TO Expression ]'
+    , -> new For from: (Chain Literal 0), op: $2, to: $3, in-comprehension: true
+    o '[ TO Expression BY Expression ]'
+    , -> new For from: (Chain Literal 0), op: $2, to: $3, step: $5, in-comprehension: true
+
+  Chain:
+    o \Head -> Chain $1
 
     o 'Chain DOT Key'  -> $1.add Index $3, $2, true
     o 'Chain DOT List' ditto
@@ -66,67 +162,15 @@ bnf =
 
     o 'Chain ?' -> Chain Existence $1.unwrap!
 
-    o 'LET CALL( ArgList OptComma )CALL Block' -> Chain Call.let $3, $6
-
-    o '[ Expression LoopHeads ]'  -> Chain $3.0.makeComprehension $2, $3.slice 1
-    o '[ Expression LoopHeads DEDENT ]'  -> Chain $3.0.makeComprehension $2, $3.slice 1
-    o '{ [ ArgList OptComma ] LoopHeads }'
-    , -> Chain $6.0.addObjComp!makeComprehension (L Arr $3), $6.slice 1
-
-    o '( BIOP )'            -> Chain Binary $2
-    o '( BIOP Expression )' -> Chain Binary $2, , $3
-    o '( Expression BIOP )' -> Chain Binary $3,   $2
-
-    o '( BIOPR )'
-    , -> Chain if   \! is $2.charAt 0
-               then Binary $2.slice(1) .invertIt!
-               else Binary $2
-    o '( BIOPR Expression )'
-    , -> Chain if   \! is $2.charAt 0
-               then Binary $2.slice(1), , $3 .invertIt!
-               else Binary $2, , $3
-    o '( Expression BIOPR )'
-    , -> Chain if   \! is $3.charAt 0
-               then Binary $3.slice(1), $2 .invertIt!
-               else Binary $3, $2
-
-    o '( BIOPBP )'                              -> Chain Binary $2
-    o '( BIOPBP CALL( ArgList OptComma )CALL )' -> Chain Binary $2, , $4
-
-    o '( BIOPP )'                                -> Chain Binary $2
-    o '( PARAM( ArgList OptComma )PARAM BIOPP )' -> Chain Binary $6, $3
-
-    o '( UNARY )'           -> Chain Unary $2
-    o '( CREMENT )'         ditto
-
-    o '( BACKTICK Chain BACKTICK )'            -> Chain $3
-    o '( Expression BACKTICK Chain BACKTICK )' -> Chain $4.add Call [$2]
-    o '( BACKTICK Chain BACKTICK Expression )'
-    , -> Chain(Chain Var \flip$ .add Call [$3]).flipIt!add Call [$5]
-
-    o '[ Expression TO Expression ]'
-    , -> Chain new For from: $2, op: $3, to: $4, in-comprehension: true
-    o '[ Expression TO Expression BY Expression ]'
-    , -> Chain new For from: $2, op: $3, to: $4, step: $6, in-comprehension: true
-    o '[ TO Expression ]'
-    , -> Chain new For from: (Chain Literal 0), op: $2, to: $3, in-comprehension: true
-    o '[ TO Expression BY Expression ]'
-    , -> Chain new For from: (Chain Literal 0), op: $2, to: $3, step: $5, in-comprehension: true
-
     o 'Chain DOT [ Expression TO Expression ]'
-    , -> Chain Slice type: $5, target: $1, from: $4, to: $6
+    , -> Slice type: $5, target: $1, from: $4, to: $6
     o 'Chain DOT [ Expression TO ]'
-    , -> Chain Slice type: $5, target: $1, from: $4
+    , -> Slice type: $5, target: $1, from: $4
     o 'Chain DOT [ TO Expression ]'
-    , -> Chain Slice type: $4, target: $1, to: $5
+    , -> Slice type: $4, target: $1, to: $5
     o 'Chain DOT [ TO ]'
-    , -> Chain Slice type: $4, target: $1
-
-    o 'WITH Expression Block'
-    , -> Chain Cascade $2, $3, \with
-    o 'FOR  Expression Block'
-    , -> Chain new For(kind: $1, source: $2, body: $3, ref: true)addBody $3
-
+    , -> Slice type: $4, target: $1
+    
   # An array or object
   List:
     o '[ ArgList    OptComma ]' -> L Arr $2
@@ -149,9 +193,9 @@ bnf =
   ArgList:
     o ''                                                -> []
     o \Arg                                              -> [$1]
-    o 'ArgList , Arg'                                   -> $1 ++ $3
-    o 'ArgList OptComma NEWLINE Arg'                    -> $1 ++ $4
-    o 'ArgList OptComma INDENT ArgList OptComma DEDENT' ditto
+    o 'ArgList , Arg'                                   -> $1.push $3; $1
+    o 'ArgList OptComma NEWLINE Arg'                    -> $1.push $4; $1
+    o 'ArgList OptComma INDENT ArgList OptComma DEDENT' -> $1 ++ $4
   Arg:
     o     \Expression
     o '... Expression' -> Splat $2
@@ -193,14 +237,14 @@ bnf =
 
   # All the different types of expressions in our language.
   Expression:
+    o \Chain -> $1.unwrap!
+
     o 'Chain CLONEPORT Expression'
     , -> Import (Unary \^^ $1, prec: \UNARY), $3,         false
     o 'Chain CLONEPORT Block'
     , -> Import (Unary \^^ $1, prec: \UNARY), $3.unwrap!, false
 
     o 'Expression BACKTICK Chain BACKTICK Expression' -> $3.add Call [$1, $5]
-
-    o \Chain -> $1.unwrap!
 
     o 'Chain ASSIGN Expression'
     , -> Assign $1.unwrap!, $3           , $2
@@ -243,26 +287,7 @@ bnf =
 
     o 'Chain !?' -> Existence $1.unwrap!, true
 
-    # The function literal can be either anonymous with `->`,
-    o 'PARAM( ArgList OptComma )PARAM -> Block'
-    , -> L Fun $2, $6, /~/.test($5), /--|~~/.test($5), /!/.test($5)
-    # or named with `function`.
-    o 'FUNCTION CALL( ArgList OptComma )CALL Block' -> L Fun($3, $6)named $1
-
-    # The full complement of `if` and `unless` expressions
-    o 'IF Expression Block Else'      -> If $2, $3, $1 is \unless .addElse $4
-    # and their postfix forms.
     o 'Expression POST_IF Expression' -> If $3, $1, $2 is \unless
-
-    # Loops can either be normal with a block of expressions to execute
-    # and an optional `else` clause,
-    o 'LoopHead Block Else' -> $1.addBody $2 .addElse $3
-    # postfix with a single expression,
-    o 'DO Block WHILE Expression'
-    , -> new While($4, $3 is \until, true)addBody $2
-    # with a guard
-    o 'DO Block WHILE Expression CASE Expression'
-    , -> new While($4, $3 is \until, true)addGuard $6 .addBody $2
 
     # `return` or `throw`.
     o 'HURL Expression'                     -> Jump[$1] $2
@@ -272,26 +297,6 @@ bnf =
     # `break` or `continue`.
     o \JUMP     -> L new Jump $1
     o 'JUMP ID' -> L new Jump $1, $2
-
-    o 'SWITCH Exprs Cases'               -> new Switch $1, $2, $3
-    o 'SWITCH Exprs Cases DEFAULT Block' -> new Switch $1, $2, $3, $5
-    o 'SWITCH Exprs Cases ELSE    Block' -> new Switch $1, $2, $3, $5
-    o 'SWITCH       Cases'               -> new Switch $1, null $2
-    o 'SWITCH       Cases DEFAULT Block' -> new Switch $1, null $2, $4
-    o 'SWITCH       Cases ELSE    Block' -> new Switch $1, null $2, $4
-    o 'SWITCH                     Block' -> new Switch $1, null [], $2
-
-    o 'TRY Block'                               -> new Try $2
-    o 'TRY Block CATCH Block'                   -> new Try $2, , $4
-    o 'TRY Block CATCH Block     FINALLY Block' -> new Try $2, , $4, $6
-    o 'TRY Block CATCH Arg Block'               -> new Try $2, $4, $5
-    o 'TRY Block CATCH Arg Block FINALLY Block' -> new Try $2, $4, $5, $7
-    o 'TRY Block                 FINALLY Block' -> new Try $2, , , $4
-
-    o 'CLASS Chain OptExtends OptImplements Block'
-    , -> new Class title: $2.unwrap!, sup: $3, mixins: $4, body: $5
-    o 'CLASS       OptExtends OptImplements Block'
-    , -> new Class                    sup: $2, mixins: $3, body: $4
 
     o 'Chain EXTENDS Expression' -> Util.Extends $1.unwrap!, $3
 
@@ -303,7 +308,7 @@ bnf =
 
   Exprs:
     o         \Expression  -> [$1]
-    o 'Exprs , Expression' -> $1 ++ $3
+    o 'Exprs , Expression' -> $1.push $3; $1
 
   # The various forms of property.
   KeyValue:
@@ -404,13 +409,13 @@ bnf =
 
   LoopHeads:
     o 'LoopHead'           -> [$1]
-    o 'LoopHeads LoopHead' -> $1 ++ $2
-    o 'LoopHeads NEWLINE LoopHead' -> $1 ++ $3
-    o 'LoopHeads INDENT LoopHead'  -> $1 ++ $3
+    o 'LoopHeads LoopHead' -> $1.push $2; $1
+    o 'LoopHeads NEWLINE LoopHead' -> $1.push $3; $1
+    o 'LoopHeads INDENT LoopHead'  -> $1.push $3; $1
 
   Cases:
     o       'CASE Exprs Block' -> [new Case $2, $3]
-    o 'Cases CASE Exprs Block' -> $1 ++ new Case $3, $4
+    o 'Cases CASE Exprs Block' -> $1.push new Case $3, $4; $1
 
   OptExtends:
     o 'EXTENDS Expression' -> $2
