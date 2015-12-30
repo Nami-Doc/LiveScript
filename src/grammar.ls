@@ -159,9 +159,12 @@ bnf =
     # (i.e. comma-separated expressions). Newlines work as well.
     ArgList:
         o ''                                                -> []
+        o 'Arg ASCR'                                        -> [$1.set-type $2]
         o 'Arg'                                             -> [$1]
         o 'ArgList , Arg'                                   -> $1 ++ $3
+        o 'ArgList , Arg ASCR'                              -> $1 ++ [$3.set-type $4]
         o 'ArgList OptComma NEWLINE Arg'                    -> $1 ++ $4
+        o 'ArgList OptComma NEWLINE Arg ASCR'               -> $1 ++ [$4.set-type $5]
         o 'ArgList OptComma INDENT ArgList OptComma DEDENT' ditto
     Arg:
         o     'Expression'

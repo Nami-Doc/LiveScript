@@ -133,6 +133,9 @@ exports <<<
             try Function "var #id" catch then @carp "invalid identifier '#id'"
         {last} = this
         # `id:_` `_.id` `@id`
+        if last.0 is 'ASCR'
+          last.1 += id
+          return input.length
         if regex-match.2 or last.0 is 'DOT' or @adi!
             @token 'ID' if id in JS_KEYWORDS then Object(id) <<< {+reserved} else id
             @token ':' ':' if regex-match.2
@@ -526,6 +529,10 @@ exports <<<
             switch @last.0
             | ',' '[' '(' 'CALL(' => @token 'LITERAL' 'void'
             | 'FOR' 'OWN'         => @token 'ID' ''
+            | 'ASCR'
+                if @ascr-depth
+                    @last.1 += ','
+                    return sym.length
         case '!=' '~='
             unless able @tokens or @last.0 in ['(' 'CREMENT']
                 @tokens.push (if val is '!=' then ['UNARY' '!' @line, @column] else ['UNARY' '~' @line, @column]), ['ASSIGN' '=' @line, @column]
@@ -551,7 +558,13 @@ exports <<<
                 return 1
             tag = 'CALL('
             @closes.push ')CALL'
-        case '[' '{'
+        case '['
+            if @last.0 is 'ASCR'
+                @ascr-depth++
+                @last.1 += '<'
+                return sym.length
+            fallthrough
+        case '{'
             @adi!
             @closes.push ']}'char-at val is '{'
         case '}'
@@ -560,6 +573,10 @@ exports <<<
                 return 9e9
             fallthrough
         case ']' ')'
+            if tag is ']' and @last.0 is 'ASCR'
+                @last.1 += '>'
+                @ascr-depth--
+                return sym.length
             if tag is ')' and @last.0 in <[ +- COMPARE LOGIC MATH POWER SHIFT BITWISE
                                             CONCAT COMPOSE RELATION PIPE BACKPIPE IMPORT
                                             CLONEPORT ASSIGN ]>
@@ -650,6 +667,10 @@ exports <<<
             @adi!
             val = 'prototype'
             tag = 'ID'
+        case '@:'
+            @ascr-depth = 0
+            tag = 'ASCR'
+            val = ''
         case '=>'
             @unline!
             @fset 'for' false
@@ -720,7 +741,9 @@ exports <<<
             @lpar.0 = 'PARAM('
             @last.0 = ')PARAM'
             return
-        if arrow is '->' then @token 'PARAM(' '' else
+        if arrow is '->'
+            @token 'PARAM(' ''
+        else
             for t, i in @tokens by -1 when t.0 in <[ NEWLINE INDENT THEN => ( ]> then break
             @tokens.splice (i + 1), 0 ['PARAM(' '' t.2, t.3]
         if offset
@@ -1356,6 +1379,7 @@ SYMBOL = //
 | \([^\n\S]*\)                  # call
 | [!=]==?                       # strict equality, deep equals
 | !?\~=                         # fuzzy equality
+| @:                            # type ascription
 | @@?                           # this / constructor
 | <\[(?:[\s\S]*?\]>)?           # words
 | <<<<?                         # import
